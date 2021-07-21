@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>XK游戏工作室</title>
+		<link rel="icon" href="https://i.loli.net/2021/07/20/CuLO3nzHTlMjmbZ.png" type="https://i.loli.net/2021/07/20/CuLO3nzHTlMjmbZ.png">
+		<link rel="shortcut icon" href="https://i.loli.net/2021/07/20/CuLO3nzHTlMjmbZ.png" type="https://i.loli.net/2021/07/20/CuLO3nzHTlMjmbZ.png">
+		<link rel="stylesheet" href="player-page.css" tppabs="https://rotopo.com/stylesheets/player-page.css">
+			<meta charset=utf-8"UTF-8">
+			<meta name="description" content="A 3D pathfinding puzzle game you can play free on your desktop or mobile browser."><meta name="title" content="roTopo">
+			<meta name="keywords" content="rotopo, gimbles, gimble, game, games, web game, online game, free game, free online game, video game, videogame, puzzle, bark and fester, bknfr, html5, flash, games for children, games for kids">
+			<meta name="author" content="Bark and Fester"><meta property="og:image" content="images/rotopo-og.png"/>
+	<meta property="og:author" content="Bark and Fester"/>
+	<meta property="og:title" content="roTopo"/>
+	<meta property="og:url" content="https://rotopo.com"/>
+	<meta property="og:description" content="A 3D pathfinding puzzle game you can play free on your desktop or mobile browser."/><script>(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+	(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+	m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+	})(window,document,'script','analytics.js'/*tpa=https://www.google-analytics.com/analytics.js*/,'ga');
+
+ga('create', 'UA-72709104-2', 'auto');
+ga('send', 'pageview');
+</script><script id="vertexShader" type="x-shader/x-vertex">varying lowp vec3 newColor;
+varying highp vec2 newUV;
+varying highp vec3 worldPos;
+varying highp vec3 eyePos;
+varying highp vec3 norm;
+varying highp vec3 modelNorm;
+uniform highp float explodeAmount;
+uniform highp vec3 playerPos;
+
+void main() {
+  newColor = color;
+  newUV = uv;
+  modelNorm = normal;
+  highp vec4 wp = modelMatrix * vec4(position,1.0);
+  wp.xyz += (normal * explodeAmount * 8.0);
+  worldPos = wp.xyz;
+  highp vec4 ep = (viewMatrix * wp);
+  eyePos = ep.xyz;
+  gl_Position = projectionMatrix * ep; 
+  norm = normalize(normalMatrix * normal);
+}
+</script><script id="fragmentShader" type="x-shader/x-fragment">varying lowp vec3 newColor;
+varying highp vec2 newUV;
+varying highp vec3 worldPos;
+varying highp vec3 eyePos;
+varying highp vec3 norm;
+varying highp vec3 modelNorm;
+
+uniform int state;
+uniform highp float explodeAmount;
+
+uniform highp vec3 playerDir;
+uniform highp vec3 playerForward;
+uniform highp vec3 playerRight;
+uniform highp vec3 playerPos;
+uniform highp float cameraDist;
+uniform highp float scale;
+
+//uniform sampler2D tex;
+
+uniform highp float time;
+uniform lowp float AOEffect;
+uniform highp float aliasScale;
+uniform lowp float ghostAlpha;
+uniform lowp vec3 coloredColor;
+uniform lowp vec3 ghostColor;
+uniform int drawWindow;
+uniform int style;
+uniform lowp vec3 nearGradient;
+uniform lowp vec3 farGradient;
+uniform lowp vec3 eyeLight;
+uniform highp vec3 eyePlayer;
+
+lowp float getAOFactor(bool front) {
+  //Experimental AO corner shading
+  lowp float AOFactor = 1.0;
+  lowp float backface = 1.0;
+  if (front) {
+    backface = 0.0;
+  }
+  
+  if (style == 2 || style == 0 || style == 3) {
+    highp float edgeType = floor(255.0 * newColor.b + 0.5);
+    highp float temp = mod(edgeType, 3.0);
+    lowp float shadeLength = 0.25 * AOEffect;
+    lowp float shadeAmount = 0.2 * AOEffect;
+    
+    if (temp + backface == 2.0 && newUV.y > 1.0 - shadeLength) {
+       AOFactor *= (1.0 - shadeAmount) + ((1.0 - newUV.y) / shadeLength) * shadeAmount;
+    }
+    
+    edgeType = floor(edgeType / 3.0);
+    temp = mod(edgeType, 3.0);
+    if (temp + backface == 2.0 && newUV.x > 1.0 - shadeLength) {
+       AOFactor *= (1.0 - shadeAmount) + ((1.0 - newUV.x) / shadeLength) * shadeAmount;
+    }
+    
+    edgeType = floor(edgeType / 3.0);
+    temp = mod(edgeType, 3.0);      
+    if (temp + backface == 2.0 && newUV.y < shadeLength) {
+      AOFactor *= (1.0 - shadeAmount) + ((newUV.y / shadeLength) * shadeAmount);
+    }
+    
+    
+    edgeType = floor(edgeType / 3.0);
+    temp = mod(edgeType, 3.0);     
+    if (temp + backface == 2.0 && newUV.x < shadeLength) {
+      AOFactor *= (1.0 - shadeAmount) + ((newUV.x / shadeLength) * shadeAmount);
+    }
+    
+    lowp float expDim = pow(max(explodeAmount, 0.0), 0.1);
+    AOFactor = AOFactor * (1.0 - expDim) + expDim;
+  }
+  return AOFactor;
+}
+
+/*
+lowp vec4 getStyle1Color() {
+  highp float borderDistance = min(min(newUV.x, newUV.y), min(1.0 - newUV.x, 1.0 - newUV.y));
+  vec4 blank = vec4(0.0, 0.0, 0.0, 0.0);
+  mediump float ramp = clamp(-(eyePos.z+cameraDist * 0.5) / 3.0, 0.0, 1.0);
+  
+  if (newColor.g > 0.5) {
+    if (newColor.g > 0.9) {
+    
+    } else {
+      return blank;
+    }
+  }
+  
+  if (borderDistance < 0.005)  return blank;
+  else if (borderDistance < 0.03) {
+    if (!gl_FrontFacing) {
+      if (mod(floor(gl_FragCoord.y / aliasScale), 5.0) < 0.9) {
+        return vec4(coloredColor, 1.0);
+      } else {
+        return vec4(mix(nearGradient, farGradient, ramp), 0.9);
+      }
+    }
+    return vec4(coloredColor, 1.0);
+  } else {
+    if (newColor.g > 0.9) {
+      return vec4(0.99, 0.99, 0.99, 0.8);
+    }
+    
+    if (false && gl_FrontFacing && mod(newUV.x * 200.0, 8.0) < 1.9) {
+      return blank;
+    } else {
+      return vec4(mix(nearGradient, farGradient, ramp), 0.9);
+    }
+  }
+}*/
+
+void setTileColor(vec3 col, vec3 white, float whiteAlpha, bool front) {
+  lowp float windowAlpha = 1.0;
+  highp float borderThickness = 0.01;
+  lowp float colAlpha = 1.0;
+  
+  if (style == 2) borderThickness = 0.008; 
+  //else if (style == 3) borderThickness = 0.0;
+  
+  
+  //Window cut
+  if (state == 1 && drawWindow == 1 && eyePos.z - eyePlayer.z > 0.0 && dot(normalize(eyePlayer), normalize(eyePos)) > 0.98) {
+    windowAlpha = clamp(1.0 - (eyePos.z - eyePlayer.z), 0.2, 1.0);
+  }
+  
+  whiteAlpha *= windowAlpha * windowAlpha;
+  colAlpha *= windowAlpha;
+  
+  highp float borderDistance = min(min(newUV.x, newUV.y), min(1.0 - newUV.x, 1.0 - newUV.y));
+  bool border = borderDistance < borderThickness;
+  bool ghost = newColor.g > 0.5;
+  bool stepOn = newColor.g > 0.9;
+  bool transition = newColor.g > 0.75;
+  bool stepOff = !stepOn && transition;        
+  
+  if (!front) {
+    col *= 0.6;
+    colAlpha *= 0.9;
+  } 
+  
+  highp float diag = mod(floor(gl_FragCoord.y / aliasScale) + floor(gl_FragCoord.x / aliasScale), 4.0);   
+  
+  if (border) {    
+    if (style == 0 || style == 3) {
+      gl_FragColor = vec4(white, whiteAlpha);
+      if (stepOn) {
+        if (diag < 1.5) 
+          discard;
+      } if (ghost && front && diag < 2.5) {
+        discard;
+      } else if (ghost && !front && (diag < 1.5 || diag > 2.5)) {
+        discard;
+      } else if (!ghost) {
+        gl_FragColor.a = 0.9 * windowAlpha;
+      }
+      
+      if(gl_FragColor.a < 0.001) {
+        discard;
+      }
+      return;
+    } else if (style == 1 || style == 2) {
+      discard;
+      return;
+    }
+  } 
+  
+  //Ghost Tile
+  if (ghost) {
+  
+      //Error
+      if (newColor.r > 0.9) {
+      
+        if (mod(floor(gl_FragCoord.y / aliasScale), 4.0) < 2.0) {
+          discard;
+          return;
+        } else {
+          white *= 0.5;
+        }
+      } 
+      
+  if (transition) {
+      gl_FragColor = vec4(col, colAlpha);
+      lowp vec4 target = vec4(white, whiteAlpha);   
+      mediump float a = 1.0;
+      
+      lowp float cutoff = 0.3;
+      //if (style == 3) cutoff = 0.4;
+      
+      if (stepOn) { //Stepped on
+        a = max(cutoff, (1.0 - time * 3.5));
+      } else { //Stepped off
+        a = max(0.0, (cutoff - time * 2.0));
+      }
+      gl_FragColor = mix(gl_FragColor, target, 1.0 - a);
+      
+  } else {
+      if (whiteAlpha < 0.01) discard;
+      gl_FragColor = vec4(white, whiteAlpha); 
+  }
+  
+    if (stepOn) {
+      if ((ghostAlpha < 0.6 && diag < 1.5) || (diag < 1.0)) 
+        discard;
+    } else if (front && diag < 2.5) {
+      discard;
+    } else if (!front && (diag < 1.5 || diag > 2.5)) {
+      discard;
+    }
+    
+  //Colored Tile
+  } else {
+    gl_FragColor = vec4(col, colAlpha * 0.87);
+  }
+  
+  
+  if (style != 3 && borderDistance > borderThickness && borderDistance < borderThickness + 0.005) {
+    gl_FragColor = mix(gl_FragColor, vec4(white, whiteAlpha), 1.0 - (borderDistance - borderThickness) / 0.005);
+  }
+}
+
+void main() {    
+  //Discard on blank tile
+  
+  if (newColor.r < 0.1 && newColor.b < 0.1 && newColor.g < 0.1) {
+    discard;
+    return;
+  }
+  
+  
+  bool front = dot(norm, normalize(-eyePos.xyz)) > 0.0;
+  lowp float AOFactor = getAOFactor(front);
+  
+  lowp vec3 col = coloredColor;
+  mediump float ramp = clamp(-(eyePos.z + cameraDist - 1.0) / 3.0, 0.0, 1.0);
+  
+  lowp vec3 white = ghostColor;
+  lowp float whiteAlpha = ghostAlpha;
+  
+  if (style != 3) {
+    if (ramp > 0.5) {
+      white = mix(white, nearGradient, (ramp - 0.5) * 0.4);
+    } else if (ramp < 0.5) {
+      white = mix(white, farGradient, (0.5 - ramp) * 0.4);
+    }
+  }
+  
+  mediump float diffuse = dot(norm, eyeLight) * 0.5;
+  
+  if (!front) {
+    white *= (0.7 + 0.3 * AOFactor) * 0.98 * ((1.1 + diffuse * 0.1));
+    whiteAlpha *= 0.7;
+  } else {
+    white *= (0.5 + 0.5 * AOFactor) * ((1.1 + diffuse * 0.15));
+  }
+  
+  
+  if (style == 0) {
+    if (ramp > 0.5) {
+      col = mix(col.rgb, farGradient, (ramp - 0.5) * 2.0);
+    } else if (ramp < 0.5) {
+      col = mix(col.rgb, nearGradient, (0.5 - ramp) * 2.0);
+    }
+  } else if (style == 1) {
+    col = nearGradient;
+  } else if (style == 2 || style == 3) {
+    col = mix(nearGradient, farGradient, ramp);
+  }
+  
+  highp float specular = dot(reflect(normalize(eyePos * -1.0), norm), eyeLight * -1.0);
+  specular = pow(max(0.0, specular), 4.0);
+  
+  col = col * (((0.85 + diffuse * 0.15) * AOFactor) * (1.0 + specular * 0.1));
+  setTileColor(col, white, whiteAlpha, front);
+  
+  //Triangle Shadow
+  if ((style == 0 || style == 3) && state != 2 && state != 3 && state < 5 && abs(dot(modelNorm, playerForward)) < 0.5 && abs(dot(modelNorm, playerRight)) < 0.5) {
+  //if (style == 0 && state != 2 && state != 3 && state != 5) {
+  
+    highp vec3 shadowDiff = ((worldPos.xyz - (playerPos)) / (0.09 * scale));
+    highp float axisDist = dot(playerForward, shadowDiff);
+    highp float dist = length(shadowDiff);
+    highp float perpDist = dot(playerRight, shadowDiff);
+    highp float slant = (1.0 - axisDist) * 0.35;
+    
+    if (dist < 2.0 && axisDist > -1.0 && axisDist < 1.0 && perpDist < slant && perpDist > -slant) {
+      gl_FragColor.rgb *= 0.6;
+      gl_FragColor.a = 0.8;
+    }
+  }
+  
+  //Sphere glow
+  
+  if (style == 2  && state != 2 && state != 3 && state != 5) {
+    highp vec3 shadowDiff = (worldPos.xyz - (playerPos)) / (0.09 * scale);
+    highp float dist = length(shadowDiff);
+    if (dist < 1.0) {
+      gl_FragColor += vec4(0.31,0.97,0.29, 1.0) * (pow((1.0 - dist), 1.0) * 0.75);
+      //gl_FragColor -= vec4(1.0,0.5, 0, 0.0) * pow((1.0 - dist), 1.0) * 0.8;
+    }
+  }
+  
+  gl_FragColor.a *= (1.0 - explodeAmount);
+  if (gl_FragColor.a < 0.01) discard;
+}
+</script><script id="sceneryVertexShader" type="x-shader/x-vertex">varying highp vec4 eyePos;
+varying highp vec3 norm;
+varying highp vec3 modelNorm;
+varying highp vec3 modelPos;
+uniform highp float explodeAmount;
+uniform highp vec3 playerPos;
+
+void main() {
+  modelNorm = normal;
+  modelPos = position.xyz;
+  eyePos = viewMatrix * modelMatrix * vec4(position,1.0);
+  gl_Position = projectionMatrix * eyePos; 
+  norm = normalize(normalMatrix * normal);
+}  
+</script><script id="sceneryFragmentShader" type="x-shader/x-fragment">varying highp vec4 eyePos;
+varying highp vec3 norm;
+varying highp vec3 modelNorm;
+varying highp vec3 modelPos;
+
+uniform int drawWindow;
+uniform highp float time;
+uniform highp float aliasScale;
+uniform lowp float failed;
+uniform lowp vec3 nearGradient;
+uniform lowp vec3 farGradient;
+uniform highp float cameraDist;
+uniform highp vec3 playerPos;
+uniform int state;
+uniform lowp vec3 eyeLight;
+uniform highp vec3 eyePlayer;
+uniform int style;
+uniform lowp float opacity;
+
+void main() {
+  mediump float ramp = clamp(-(eyePos.z+ (cameraDist)) / 1.5, 0.0, 1.0);    
+  lowp vec3 col = mix(nearGradient, farGradient, ramp);
+  highp vec3 eyeUnit = normalize(-eyePos.xyz);
+  highp float specular = dot(reflect(eyeUnit, norm), eyeLight * -1.0);
+  lowp float diffuse = dot(norm, eyeLight) * 0.5 + 0.5;
+  lowp float localShade = max(0.0, (normalize(modelNorm).z));
+  
+  if(style == 3) {
+    highp vec3 playerDir = eyePlayer - eyePos.xyz;
+    lowp float playerDiffuse = max(1.0 - length(playerDir) / 1.0, 0.0);
+    diffuse = diffuse * 0.1 + playerDiffuse * 0.9;
+    
+    if (length(playerDir) < 1.0) {
+      highp float playerSpecular = dot(reflect(eyeUnit, norm), normalize(playerDir));
+      
+      playerSpecular = pow(max(0.0, playerSpecular), 5.0);
+      specular = pow(max(0.0, specular), 5.0);
+      
+      specular = max(specular, playerSpecular);
+      specular = playerSpecular * playerDiffuse;
+    } else {
+      specular = 0.0;
+    }
+    col.rgb = col.rgb * (( 0.6 + diffuse * 0.45) * (0.75 + localShade * 0.25) * (1.0 + specular * 0.5));
+    gl_FragColor = vec4(col, (0.75 + (specular) * 0.25));    
+  } else {
+    specular = pow(max(0.0, specular), 5.0);
+    col.rgb = col.rgb * (( 0.85 + diffuse * 0.15) * (0.75 + localShade * 0.25) * (1.0 + specular * 0.13));
+    gl_FragColor = vec4(col, (0.85 + (specular) * 0.15));     
+  } 
+  
+  
+  gl_FragColor = vec4(col, (0.85 + (specular) * 0.15));    
+  
+  
+  
+  
+  //Borders
+  
+  if (modelPos.z > 0.2 && style != 3) {
+    gl_FragColor.rgb *= 0.75;
+  } else if(abs(modelPos.x) > 0.975 || abs(modelPos.y) > 0.975) {
+    gl_FragColor.rgb *= 0.6;
+    gl_FragColor.a = 1.0;
+  }  
+  
+  if (modelPos.z < 0.01) {
+    gl_FragColor.rgb *= 0.6;
+  }
+  
+  //Window cut
+  if (state == 1 && drawWindow == 1 && eyePos.z - eyePlayer.z > 0.3 && dot(normalize(eyePlayer), normalize(eyePos.xyz)) > 0.98) {
+    gl_FragColor.a = clamp(1.0 - (eyePos.z - eyePlayer.z), 0.2, 1.0);
+  }
+  
+  gl_FragColor.a *= opacity;
+  
+}</script><script id="avatarVertexShader" type="x-shader/x-vertex">//varying highp vec2 newUV;
+varying highp vec3 lightDir;
+varying highp vec3 modelPos;
+varying highp vec4 eyePos;
+varying highp vec3 norm;
+
+void main() {
+  //newUV = uv;
+  modelPos = position;
+  highp vec4 worldPos = modelMatrix * vec4(position,1.0);
+  eyePos = viewMatrix * worldPos;
+  lightDir = normalize((viewMatrix * vec4(0.2, 1.0, 0.2, 0.0)).xyz);  
+  gl_Position = projectionMatrix * eyePos; 
+  norm = normalize(normalMatrix * normal);
+}
+</script><script id="avatarFragmentShader" type="x-shader/x-fragment">//varying highp vec2 newUV;
+varying highp vec3 lightDir;
+varying highp vec4 eyePos;
+varying highp vec3 norm;
+varying highp vec3 modelPos;
+
+uniform sampler2D tex;
+uniform lowp vec3 color;
+uniform highp float gloss;
+uniform lowp vec3 specularColor;
+uniform lowp vec3 backfaceColor;
+uniform lowp float ambient;
+uniform lowp float dissolve;
+uniform lowp float opacity;
+uniform highp float aliasScale;
+
+
+float rand(vec3 co){
+  return fract(sin(dot(co ,vec3(12.9898, 78.233, 453.3178))) * 43758.5453);
+}
+
+void main() {
+
+  lowp float amb = ambient;
+  
+  lowp float diffuse = dot(norm, lightDir) * (1.0-amb) + amb;
+  lowp float specular = dot(reflect(normalize(eyePos.xyz * -1.0), norm), lightDir * -1.0);
+  
+  specular = pow(max(0.0, specular), gloss);
+  
+  
+  //specular = floor(specular * 8.0) / 7.0;
+  //diffuse = floor(diffuse * 7.0) / 7.0;
+  
+  
+  lowp vec3 specularResult = specularColor * specular;
+  
+  
+  lowp vec3 newColor = vec3(0.4196, 0.61568, 0.7372);
+  newColor = color;
+  
+  /*
+  #ifdef USE_MAP
+    newColor = texture2D(tex, newUV).rgb;
+  #endif
+  */
+  
+  
+  if (gloss > 0.0) {
+    gl_FragColor = vec4(newColor * (diffuse) + specularResult, opacity);
+  } else {
+    gl_FragColor = vec4(newColor * (diffuse), opacity);
+  }
+  
+  if (dissolve > 0.0) {
+    lowp float delete = rand(modelPos);
+    
+    if (delete < dissolve) {
+      discard;
+    }
+  }
+}
+</script><script id="oceanVertexShader" type="x-shader/x-vertex">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec3 lightDir;
+varying highp vec4 eyePos;
+varying highp vec3 norm;
+
+void main() {
+  newUV = uv;
+  worldPos = modelMatrix * vec4(position,1.0);
+  eyePos = viewMatrix * worldPos;
+  lightDir = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);  
+  gl_Position = projectionMatrix * eyePos; 
+  norm = normalMatrix * normal;
+}
+</script><script id="oceanFragmentShader" type="x-shader/x-fragment">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+
+void main() {
+
+  highp float distance = length(worldPos);
+  //gl_FragColor = vec4(0.125, 0.241, 0.393, clamp(distance / 100.0, 0.0, 0.3));
+  gl_FragColor = vec4(0.11, 0.357, 0.478, (1.0 - clamp(distance / 50.0, 0.0, 1.0)) * 0.5);
+}
+</script><script id="gradientFragmentShader" type="x-shader/x-fragment">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec3 norm;
+
+uniform lowp vec3 loColor;
+uniform lowp vec3 hiColor;
+
+lowp vec3 blend(vec3 cola, vec3 colb, float amount) {
+  return colb * amount + (cola * (1.0 - amount));
+}
+
+void main() {
+  mediump vec3 n = normalize(worldPos.xyz);
+  gl_FragColor.rgb = blend(loColor, hiColor, n.y * 0.5 + 0.5);
+  gl_FragColor.a = 1.0;
+}</script><script id="cloudVertexShader" type="x-shader/x-vertex">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec4 eyePos;
+varying highp vec2 center;
+uniform highp float scale;
+
+void main() {
+  newUV = uv;
+  worldPos = modelMatrix * vec4(position,1.0);
+  eyePos = viewMatrix * worldPos;
+  gl_Position = projectionMatrix * eyePos; 
+  gl_PointSize = scale / length(eyePos.xyz);
+}
+
+</script><script id="cloudFragmentShader" type="x-shader/x-fragment">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec4 eyePos;
+
+void main() {
+  lowp float alpha = max(0.0, (0.5 - length(gl_PointCoord - vec2(0.5, 0.5))) * 2.0);
+  highp vec2 coord = gl_PointCoord - vec2(0.5, 0.5);
+  //lowp float alpha = (1.0 - (abs(coord.x) + abs(coord.y)));
+  //lowp float alpha = 0.2;
+  
+  lowp float scale = 1.0;
+  //lowp vec3 color = vec3(0.95, 0.98, 1.0) * (0.87 + (1.0-gl_PointCoord.y) * 0.13);
+  lowp vec3 color = vec3(0.89, 0.96, 0.97) * (0.87 + (1.0-gl_PointCoord.y) * 0.13);
+  gl_FragColor = vec4(color, alpha);
+}
+</script><script id="particleVertexShader" type="x-shader/x-vertex">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec4 eyePos;
+varying highp vec2 center;
+uniform highp float scale;
+uniform highp vec3 playerPos;
+varying highp float playerDist;
+
+void main() {
+  newUV = uv;
+  worldPos = modelMatrix * vec4(position,1.0);
+  eyePos = viewMatrix * worldPos;
+  gl_Position = projectionMatrix * eyePos; 
+  playerDist = length(worldPos.xyz - playerPos);
+  gl_PointSize = scale / length(eyePos.xyz) * max(0.0, 1.0 - playerDist);
+  //gl_PointSize = 1.0;
+}
+</script><script id="particleFragmentShader" type="x-shader/x-vertex">varying highp vec2 newUV;
+varying highp vec4 worldPos;
+varying highp vec4 eyePos;
+uniform highp vec3 playerPos;
+varying highp float playerDist;
+
+void main() {
+  lowp float alpha = max(0.0, (0.5 - length(gl_PointCoord - vec2(0.5, 0.5))) * 2.0);
+  highp vec2 coord = gl_PointCoord - vec2(0.5, 0.5);
+  //lowp float alpha = (1.0 - (abs(coord.x) + abs(coord.y)));
+  //lowp float alpha = 0.2;
+  
+  lowp float scale = max(0.0, 0.4 * (1.0 - playerDist));
+  lowp vec3 color = vec3(0.31, 0.97, 0.29) * (0.87 + (1.0-gl_PointCoord.y) * 0.13) * scale;
+  gl_FragColor = vec4(color, 1.0);
+  //gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+  
+  if (alpha <= 0.0) {
+    discard;
+  }
+}</script></head><body><script name="level-menu" type="text/x-handlebars-template" class="hbs-template"><div class="selectors"><div tag="easy" class="selector button easy">easy</div><div tag="intermediate" class="selector button intermediate">intermediate</div><div tag="advanced" class="selector button advanced">advanced</div><div tag="insane" class="selector button insane">insane</div><br><div tag="all" class="selector button all">all</div><div tag="solved" class="selector button">solved</div><div tag="unsolved" class="selector button">unfinished</div></div><div class="levels"></div></script><script name="levels" type="text/x-handlebars-template" class="hbs-template"><div class="levels-container">{{#each levels}}<div class="level-entry"><div index="{{level_id}}" title="view more info" class="preview">i</div><div index="{{level_id}}" class="level">{{directory}}//{{name}} {{#solved this}} {{/solved}}</div></div>{{/each}}<div class="button shop">get more levels</div></div></script><script name="factor-list" type="text/x-handlebars-template" class="hbs-template">{{#each factors}}
+{{#if this}}<div class="factor">{{reason}}{{#time-left this}}{{/time-left}} <b>{{{symbol}}}{{decimal factor}}</b></div>{{/if}}
+{{/each}}</script><script name="overlay" type="text/x-handlebars-template" class="hbs-template"><div class="fade"></div><div class="pause-button"><div class="bar left"></div><div class="bar right"></div></div><div class="game line gimbles"><div class="line-section gimble-count">you have <span id="gimbles">0</span> gimbles</div><div class="button shop italic">spend!</div><br><div class="reward-bar"></div><div class="reward-text"></div><div class="tasks condensed"><div class="line-section task time-record"><span>time record: </span><span class="current time">0:00</span><span class="record-time">/-:-</span></div><br><div class="line-section task retry-record"><span>retry record: </span><span class="current retries">0</span><span class="record-retries">/-</span></div><br><div class="line-section task turn-record"><span>turn record: </span><span class="current turns">0</span><span class="record-turns">/-</span></div><br><div class="line-section badges">badges</div><div class="button badges italic">view!</div></div></div><div class="game line levels"><div title="restart current level-pack from first level" class="button restart icon">&#x21bb;</div><div title="play next level-pack in shuffle list" class="button shuffle icon">shuffle</div><div class="line-section leveldisplay">roTopo//</div></div><div id="level-menu" style="display:none"></div><div id="multiplier"><div class="display"><span class="x-symbol">&times;</span><span class="number">1.00</span></div><div class="factor-list"></div></div><div id="settings"><div class="header">SETTINGS</div><div class="settings-list">{{> game-settings}}</div></div></script><script name="settings-list" type="text/x-handlebars-template" class="hbs-template"><div class="setting"><span class="label">anti-aliasing: </span><div name="antialiasing" class="options"><span class="option low">low</span>/<span class="option med">med</span>/<span class="option hi">hi</span>/<span class="option retro">retro</span></div></div><div class="setting"><span class="label">music: </span><div name="music" class="options"><span class="option on">on</span>/<span class="option off">off</span></div></div><div class="setting"><span class="label">camera scheme: </span><div name="camera" class="options"><span class="option auto">auto</span>/<span class="option follow">follow</span></div></div><div class="setting"><span class="label">controls: </span><div name="controls" class="options"><span class="option default">default</span>/<span class="option inverted">inverted</span></div></div><div class="setting"><span class="label">fullscreen: </span><div name="fullscreen" class="options"><span class="option on">on</span>/<span class="option off">off</span></div></div><div class="footer"><div class="button italic menu-return">return to menu</div><br><div class="button italic read-manual">read the manual</div><br><div class="button italic contact-us">send us a message</div><div class="setting">&copy; bark and fester llc</div><div class="setting"><a href="http://alkin.wang/" target="_blank">我的博客 （现在还打不开）</a>//<a href="https://www.kxdao.net/" target="_blank">科学刀</a>//<a href="http://bknfr.com/tag/privacy" target="_blank">privacy</a></div></div></script><script name="avatar-items" type="text/x-handlebars-template" class="hbs-template">{{#each avatars}}<div style="background-image: url('{{img}}')" item_id="{{item_id}}" class="shop-item avatar"><div class="costs"><div class="point-cost">{{point_price}}</div>{{#cashPurchase this}}<div class="cash-cost">{{#cash cash_price}}{{/cash}}</div>{{else}}<div class="cash-cost">in cart!</div>{{/cashPurchase}}</div><div class="info"><div title="view more info" class="preview">info			</div><div class="line-section basic name descrip">{{name}}</div><br><div class="line-section basic difficulty descrip {{difficulty}}">{{difficulty}}</div><br><br>{{#ifPurchased this}}<div item_id="{{item_id}}" name="{{name}}" class="button use-avatar">use avatar</div>{{else}}
+{{#if point_price}}<div item_id="{{item_id}}" class="purchase-points"><div class="button pointpurchase">purchase</div><div class="button pointprice">for {{point_price}}</div></div>{{/if}} 
+{{#cashPurchase this}}<div item_id="{{item_id}}" class="purchase-cash"><div class="button cashpurchase">purchase</div><div class="button cashprice">for {{#cash cash_price}}{{/cash}}</div></div>{{else}}<div class="purchase-cash"><div class="button cart-checkout">in cart!</div></div>{{/cashPurchase}}
+{{/ifPurchased}}</div></div>{{/each}}  <div class="shop-list-spacer"></div></script><script name="level-items" type="text/x-handlebars-template" class="hbs-template">{{#each level_packs}}<div style="background-image: url('{{#if img}}{{img}}{{else}}/images/shop/levels/default.jpg{{/if}}')" item_id="{{item_id}}" class="shop-item levels">{{#if premium}}<img src="star.png"/*tpa=https://rotopo.com/images/shop/star.png*/ class="premium-star">{{/if}}<div class="costs"><div class="point-cost">{{point_price}}</div>{{#cashPurchase this}}<div class="cash-cost">{{#cash cash_price}}{{/cash}}</div>{{else}}<div class="cash-cost">in cart!</div>{{/cashPurchase}}</div><div class="info"><div title="view more info" class="preview">info</div><div class="line-section basic name descrip">{{name}}({{numPuzzles}})</div><br><div class="line-section basic difficulty descrip {{difficulty}}">{{difficulty}}</div><br><br>{{#ifPurchased this}}<div level_id="{{level_id}}" class="button play-level">play now</div>{{else}}
+{{#if point_price}}<div item_id="{{item_id}}" class="purchase-points"><div class="button pointpurchase">purchase</div><div class="button pointprice">for {{point_price}}</div></div>{{/if}} 
+{{#cashPurchase this}}<div item_id="{{item_id}}" class="purchase-cash"><div class="button cashpurchase">purchase</div><div class="button cashprice">for {{#cash cash_price}}{{/cash}}</div></div>{{else}}<div class="purchase-cash"><div class="button cart-checkout">in cart!</div></div>{{/cashPurchase}}
+{{/ifPurchased}}</div></div>{{/each}}<div class="shop-list-spacer"></div></script><script name="item-description" type="text/x-handlebars-template" class="hbs-template"><div class="box description">{{#if video}}<span class="ad-bonus-field">Multiplier bonus <span class="ad-bonus-counter">after watching preview.</span></span><div class="video"><iframe id="yt-player" class="youtube" width="1280" height="720" src="https://www.youtube.com/embed/{{video}}?controls=1&autoplay=0&enablejsapi=1" frameborder="0" allowfullscreen></iframe></div>{{else}}<img src="vid_placeholder.png"/*tpa=https://rotopo.com/images/vid_placeholder.png*/ class="video">{{/if}}<div class="text"><div class="name"><span>{{name}}</span>{{#if numPuzzles}}<div class="num-puzzles">({{numPuzzles}} levels)</div>{{/if}}</div>{{#if multiplier}}<div class="multiplier">multiplier: <b> +{{multiplier}} </b></div>{{/if}}
+{{#if speed}}<div class="speed">speed: <b> {{speed}} </b></div>{{/if}}
+{{#if mod}}<div class="mod">mod: <b> {{mod}} </b></div>{{/if}}<div class="description">{{{description}}}</div>{{#if source}}<div class="source">-{{source}}</div>{{/if}}<br></div>{{#ifPurchased this}}<div class="empty"></div>{{else}}
+{{#if point_price}}<div item_id="{{item_id}}" class="button pointpurchase">purchase for {{point_price}} gimbles </div>{{/if}}
+{{#if cash_price}}<div item_id="{{item_id}}" class="button cashpurchase">add to cart for {{#cash cash_price}}{{/cash}}</div>{{/if}}
+{{/ifPurchased}}<div class="button back"><< go back</div>{{> bknfr-footer}}   </div></script><script name="checkout-review" type="text/x-handlebars-template" class="hbs-template"><div class="cart-review-boxes"><div class="box cart-review"><div class="header">REVIEW</div><div class="item-list"><div class="items">{{#each items}}<div class="cart-item"><div item_id="{{item_id}}" class="remove">remove</div><div class="cost">{{#cash cash_price}}{{/cash}}</div><div class="name">{{directory}}/{{name}}</div></div>{{/each}}
+{{#if fee}}<div class="cart-item"><div class="spacer"></div><div class="cost">{{#cash fee}}{{/cash}}</div><div class="name">processing fee*</div></div>{{/if}}  </div></div><div class="total">YOUR <span class="blue">TOTAL </span>IS <span class="blue">{{#cash totalPrice}}{{/cash}}</span></div>{{#if fee}}<div class="info">*processing fee waived on purchases above $1</div>{{/if}}</div></div></script><script name="checkout-box" type="text/x-handlebars-template" class="hbs-template"><div class="checkout-area"><div class="box cart-checkout"><div class="header">PAY</div><form class="checkout-form"><div id="braintree-area"></div><input type="submit" value="pay {{#cash totalPrice}}{{/cash}}" class="button submit"><div class="button back">continue shopping</div><div class="info">Payments processed <a target="_blank" href="https://www.braintreepayments.com/developers/security">securely</a> by <a target="_blank" href="http://braintreepayments.com/">Braintree</a>, a PayPal company. roTopo does not see or store your payment information. <br>Learn more on our <a href="http://bknfr.com/tag/terms" target="_blank">terms of service.</a></div></form></div></div></script><script name="overlay-shop" type="text/x-handlebars-template" class="hbs-template"><div class="checker-bg"></div><div id="shop"><a href="http://vgppl.com/" target="_blank"><div class="shop-ad"></div></a><div style="max-height: calc(100% - 6em);" class="line"><div class="shop-section levels"><div style="display:inline-block;" class="line-section">level-packs</div><div class="subline selectors"><div tag="all" class="button all">all ></div><div tag="easy" class="button easy">easy</div><div tag="intermediate" class="button intermediate">intermediate</div><div tag="advanced" class="button advanced">advanced</div><div tag="insane" class="button insane">insane</div></div><div class="shop-list"></div></div><div class="shop-section avatars"><div style="display:inline-block;" class="line-section">avatars</div><div class="subline selectors"><div tag="all" class="button all">all ></div><div tag="purchased" class="button purchased">purchased</div><div tag="locked" class="button locked">for sale</div></div><div class="shop-list"></div></div></div></div><div class="shop line gimbles"><div class="line-section">you have <span id="gimbles">0</span> gimbles</div><div class="button back italic"><< go back</div><div id="line-cart" style="display:inline"><div class="line-section plain">and <span id="cart-count">0</span> items in your cart.</div><div class="button cart-checkout italic">checkout!</div></div><!--.line-section.button.italic.ad Watch a video for a better multiplier.--></div><div class="shop line levels"><div class="button back italic"><< go back</div><div class="line-section">roTopo//shop</div></div><div class="fade"></div></script><script name="tutorial-0" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial pause"><div class="info">Hello! I've paused the game to tell you that I think you're doing great.<br><br><span style="font-style:italic">You</span> can also pause the game whenever by hitting the <span style="font-weight:bold">[spacebar]</span> or by <span style="font-weight:bold">double-tapping</span>.<br><br>While we're here, let's take a quick tour.</div><div class="button next">next >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-1" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial levels"><div class="info">Below, you can change the level you're playing.<br><br>Click the <span class="mock-button">&#x21bb;</span> button <span style="font-weight:bold">[backspace]</span> to restart the current level-pack from the first level. <br><br>Click the <span class="mock-button">shuffle</span> button <span style="font-weight:bold">[tab]</span> to play a different level-pack.<br><br>Click the current level name to open the level menu.</div><div class="button next">next >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-2" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial level-menu"><div class="info">Above is your level menu, where you can view and play your level-packs.
+Click any level-pack to start playing it. A star indicates you've already beaten it.<br><br>Up top are selectors used to filter level-packs by category. 
+Only the listed packs will be shuffled through (either when you complete a pack or when the  <span class="mock-button">shuffle</span> button is pressed) until a different filter is selected.<br><br>Click the <span class="mock-button">i</span> next to a pack to reveal its video preview and the records you've set for it.</div><div class="button next">next >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-3" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial multiplier"><div class="info">All the way up here is your gimble multiplier. 
+The higher this number, the more gimbles you earn when you beat a level.
+There are a bunch of ways to increase the multiplier:<br><br><li>Complete levels without dying lots.</li><li>Play a level you haven't beaten yet.</li><li>Play with a different avatar from the shop.</li><li>Watch preview videos of levels or avatars for a temporary bonus.</li><li>Login for a temporary, daily bonus.</li></div><div class="button next">next >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-4" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial records"><div class="info">Here you can keep track of records you've set for the current level-pack.<br><br><li><b>Time record:</b> How long the entire pack took to beat.</li><li><b>Retry record:</b> How many times you died.</li><li><b>Turn record:</b> How many times you changed direction.</li><br>Below these records, you can <span class="mock-button">view!</span> your badges page, where I keep track of your completed levels, your records set, and your owned avatars.</div><div class="button next">next >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-5" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial spend"><div class="info">Almost done. Up here is how many gimbles you've earned.
+Next to that is the <div class="span mock-button">spend!</div> button, which takes you to the shop where you can spend your gimbles on new level-packs and avatars.</div><div class="button shop">go to shop >></div><div class="button ok">skip tutorial</div></div></script><script name="tutorial-6" type="text/x-handlebars-template" class="hbs-template"><div class="alert box tutorial shop"><div class="info">Here in the shop, you can buy more challenging level-packs and avatars with special abilities and themes.<br><br>Hover over (or tap) any item to view its name and difficulty. Click the <div class="span mock-button">info</div> button for even more information as well as video previews.<br><br>That's all, thanks for playing!</div><div class="button ok">get back to it</div></div></script><script name="box-settings" type="text/x-handlebars-template" class="hbs-template"><div id="settings" class="alert box settings"><div class="header">SETTINGS</div><div class="settings-list">{{> game-settings}}</div><div class="button ok">ok</div></div></script><script name="level-overview" type="text/x-handlebars-template" class="hbs-template"><div class="alert box overview">{{#if video}}<span class="ad-bonus-field">Multiplier bonus <span class="ad-bonus-counter">after watching preview.</span></span><div class="video"><iframe id="yt-player" class="youtube" width="1280" height="720" src="https://www.youtube.com/embed/{{video}}?controls=1&autoplay=0&enablejsapi=1" frameborder="0" allowfullscreen></iframe>  </div>{{else}}<div class="video">No Preview.</div>{{/if}}<div class="text"><div class="diff">{{difficulty}}//</div><div class="name">{{name}}</div>{{#level-stats this}}
+{{/level-stats}}</div><div level_id="{{level_id}}" class="button play-level">play level</div><div class="button ok"><< go back</div></div></script><script name="level-stats" type="text/x-handlebars-template" class="hbs-template"><div class="fields"><div class="field">Puzzles completed: <b>{{completed}}</b></div><div class="field">Fewest retries: <b>{{retry_record}}</b></div><div class="field">Fewest turns: <b>{{turn_record}}</b></div><div class="field">Fastest time: <b>{{time_record}}</b></div></div></script><script name="remind-shop" type="text/x-handlebars-template" class="hbs-template"><div class="alert box shop-reminder"><div class="header">SPEND YOUR GIMBLES!</div><div class="info">Congrats! You've beaten most of the starter levels. Spend your gimbles to unlock more.<br><br>Click the <span class="mock-button italic">spend! </span> button in the top left at any time to access the shop. Your active game will be paused.<br><br><b><u>IMPORTANT!</u></b> You can play/replay any level you've unlocked by opening up the <b>pause screen</b>, (spacebar or double-tapping), and selecting the level from the <b>level menu</b> in the bottom right. </div><div class="button shop">proceed to shop!</div><div class="button ok">ok</div></div></script><script name="contact" type="text/x-handlebars-template" class="hbs-template"><div class="alert box contact"><div class="header">CONTACT</div><div class="info">Please use this form to submit any feedback, report a bug or ask a question. You may provide an email address for our reply.</div><div class="form"><div class="label">email </div><input type="textfield" placeholder="(optional)" class="email"><div class="label">subject </div><input type="textfield" class="subject"><div style="height:1em" class="spacer"></div><div style="vertical-align: top;" class="label">message</div><textarea class="message"></textarea></div><div class="button submit"><span style="color:#0c0;font-size:0.8em;">&#10003;  </span>submit</div><div class="button ok"><span style="color:#c00;">x </span>cancel</div></div></script><script name="confirm-restart" type="text/x-handlebars-template" class="hbs-template"><div class="alert box confirm-restart help"><div class="header">RESTART LEVEL-PACK?</div><div class="info">Click 'restart' to restart the current level-pack from the first level.</div><div class="button restart">&#x21bb; restart</div><div class="button ok">cancel</div></div></script><script name="alert-no-webgl" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">WebGL NOT DETECTED</div><div class="info"><div class="error">error: {{error}}</div><div class="message">WebGL is either disabled or not supported in this browser. The most recent versions of most major browsers support WebGL, but you may need to upgrade or enable it in settings. We recommend Google Chrome for best performance. </div></div><div class="button reload">reload roTopo</div></div></script><script name="alert-not-signed-in" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">SOMETHING WENT WRONG</div><div class="info"><div class="error">error: {{error}}</div><div class="message">The server isn't recognizing your login session. Make sure you have cookies enabled and try reloading.</div></div><div class="button reload">reload roTopo</div></div></script><script name="alert-insufficient-funds" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">NOT ENOUGH POINTS</div><div class="info"><div class="error">error: {{error}}</div><div class="message">You don't have enough points to purchase that item.</div></div><div class="button ok">ok</div></div></script><script name="alert-braintree" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">PAYMENT PROCESSOR OFFLINE</div><div class="info"><div class="error">error: {{error}}</div><div class="message">We're having trouble connecting to our payment processor. Please try again later on.</div></div><div class="button ok">ok</div><div class="button reload">reload roTopo</div></div></script><script name="alert-other" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">SOMETHING WENT WRONG</div><div class="info"><div class="error">error: {{error}}</div><div class="message">{{message}}</div></div><div class="button ok">continue</div><div class="button reload">reload roTopo</div></div></script><script name="alert-network" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">SOMETHING WENT WRONG</div><div class="info"><div class="error">error: {{error}}</div><div class="message">We were unable to connect to our login servers. Please try again in a moment.</div></div><div class="button reload">reload roTopo</div></div></script><script name="alert-invalid" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">SOMETHING WENT WRONG</div><div class="info"><div class="error">error: {{error}}</div><div class="message">We were unable to process your request because it was not properly formatted.</div></div><div class="button reload">reload roTopo</div></div></script><script name="alert-connection" type="text/x-handlebars-template" class="hbs-template"><div class="alert box error"><div class="header">SOMETHING WENT WRONG</div><div class="info"><div class="error">error: CONNECTION_ERROR</div><div class="message">Connection to the server could not be established. You may be offline or the server may be down for maintenance. Check <span style="font-weight:bold"><a target="_blank" style="color:white" href="https://twitter.com/barkandfester">@barkandfester</a></span> for status updates.</div></div><div class="button reload">reload roTopo         </div></div></script><script name="achievements" type="text/x-handlebars-template" class="hbs-template"><div class="alert box badges"><div class="badges-star">&#9733;</div><div class="badges-label completionist">COMPLETIONIST</div><div class="badges-box">{{#each COMPLETIONIST}}<div class="badge badge {{@key}}"><div class="table"><div class="cell"><div class="badge-text">{{text}}</div></div></div></div>{{/each}}</div><div class="button ok"><< go back</div></div></script><script name="manual" type="text/x-handlebars-template" class="hbs-template"><div class="alert box manual"><div class="header">roTopo MANUAL</div><div class="text-panel"><div class="section"><div class="header">GAMEPLAY</div><div class="subheader">BEATING PUZZLES</div><div class="text">Clear puzzles by stepping on every tile exactly once. 
+Your avatar will begin running when the puzzle starts, and must be steered with the arrow / WASD keys, or by swiping with your finger on mobile devices.
+Stepping off the puzzle or onto a tile that has already been cleared will reset the puzzle. Some tile moves are invalid, such as when the tile's front side is facing away from you. </div><div class="subheader">GIMBLES</div><div class="text">Complete puzzles to earn gimbles, or points, which can be exchanged for new level-packs and avatars in the shop.
+New avatars may come with special abilities that modify gameplay.<br><br>The multiplier in the top right corner allows you to earn more gimbles. 
+Various factors affect your multiplier, including the current winning/losing streak, daily bonuses, watching ads, and avatar-specific factors.</div><div class="subheader">LEVELS</div><div class="text">Levels are grouped into level-packs.
+Complete a level-pack by beating all of its levels (around 4 - 7 puzzles), to earn a star on the level menu.
+When a level-pack is completed, a random level-pack from your shuffle list is automatically started.
+Current progress within a level-pack is saved temporarily, allowing you to switch between packs or resume the game later without starting over.<br><br>Click the restart <span class="mock-button">&#x21bb;</span> button or press 'backspace' to restart the current level from the first puzzle.<br>Click the shuffle <span class="mock-button">shuffle</span> button or press 'tab' to play the next level from your shuffle list.</div></div><div class="section"><div class="header">ACCOUNTS AND SAVE DATA</div><div class="text">Click <span class="mock-button">play using facebook</span> or <span class="mock-button">play using google</span> from the main menu to create an account with your preferred service. This will allow you to purchase items in the shop and save your game progress. Please remember which service and account you chose.<br><br>A unique ID number provided by either Google or Facebook will identify your account. No other information is accessed. <br><br>A cookie will be set on your browser after logging in to identify your device. 
+If the cookie is cleared, click the appropriate play button again to reset it.<br><br>After registering, all game progress and purchase information will automatically be saved on the server. 
+The same account may be used across multiple devices, including mobile devices.</div></div><div class="section"><div class="header">PAUSE MENU</div><div class="text">Open the pause menu by pressing spacebar, clicking the puzzle indicator in the bottom right, or double-tapping on mobile.
+Exit the pause menu by clicking/tapping the pause icon or by hitting spacebar again.</div><div class="subheader">LEVEL SELECTOR</div><div class="text">The level selector in the bottom right of the pause menu allows you to view and play available levels. 
+Use the selector buttons to display levels based on difficulty or completion status.
+A shuffle list is formed whenever a selector button is pressed.
+Click the information button <span class="mock-button">i</span> next to a level-pack name to view your progress and records.</div><div class="subheader">SETTINGS</div><div class="text">The settings panel in the bottom left of the pause menu allows you to modify graphics, sound and gameplay options. Settings are saved in your browser's local storage.
+Helpful links including the contact form, terms of service, and manual are also available beneath the settings panel.</div><div class="subheader">OTHER</div><div class="text">When a level-pack is beaten, various records (eg, number of retries) are saved. Past records and current progress are displayed in the task bars on the left of the pause menu.<br><br>Your current multiplier and the factors affecting it are displayed in the top right.</div></div><div class="section"><div class="header">SHOP</div><div class="text">Access the shop by clicking the <span class="mock-button italic">spend!</span> button in the top left corner.
+Your active game will be paused for when you return from the shop.</div><div class="subheader">SHOP ITEMS</div><div class="text">View more information about the levels and avatars in the shop by clicking the information <span class="mock-button">info</span> button next to each item.
+In the information panel, you can make purchases and watch video previews, which also award multiplier bonuses.<br><br>Purchases can be made using gimbles or cash, and will be permanently added to your account. 
+Items purchased with cash will appear in your shopping cart before checkout. Please review all cart items before paying.
+Cash payments can be made with PayPal or with any valid credit card. 
+Consider purchasing the <b>&#9733;level pass&#9733;</b> to unlock all available and future levels.</div><div class="subheader">AVATARS</div><div class="text">Different avatars come with different visual themes and effects, and may modify the gameplay and multiplier.
+Once an avatar is purchased, mouse over to the avatar and click <span class="mock-button">use avatar</span> to activate it.
+Your current avatar will be switched out the next time a puzzle is started. </div></div><div class="section"><div class="header">CONTACT</div><div class="text">Click the <span class="mock-button">send us a message</span> button from the settings panel to submit any questions and feedback or to report any issues with your account.
+Please provide an email address for our reply if applicable. Allow a few days for a response.
+You may also send any emails to barkandfester@gmail.com</div></div></div><br><div class="button ok">OK</div></div></script><script name="bknfr-footer" type="text/x-handlebars-template" class="hbs-template"><div class="footer"><span>&copy; bark nd fester llc</span><br><a href="http://alkin.wang/" target="_blank">我的博客 （现在还打不开）</a>//<a href="https://www.kxdao.net/" target="_blank">科学刀</a>//<a href="http://bknfr.com/tag/privacy" target="_blank">privacy policy</a></div></script><script name="console" type="text/x-handlebars-template" class="hbs-template">The roTopo team would like to thank the developers of THREE.js, Node.js, Chrome's V8 compiler, HTML5 and Blender3D for making this game possible.
+
+We'd also like to thank our alpha/beta testers for giving us their time and providing much useful feedback and encouragement.
+Thanks for playing roTopo and happy puzzling.
+
+-Bark and Fester LLC, New York, 2016
+
+PS: We know you're clever, but humbly request that players refrain from using console commands out of respect for the developers and out of fairness for other players. Game saves made by hacking or cheating are subject to deletion.
+</script><script name="menu" type="text/x-handlebars-template" class="hbs-template"><img id="logo" src="logo.png"/*tpa=https://rotopo.com/images/logo.png*/><div class="version">v1.0</div><div class="menu-content">{{#if MOBILE}}<img src="gimble_menu_controls_mobile.png"/*tpa=https://rotopo.com/images/gimble_menu_controls_mobile.png*/ class="controls"><div class="blue">The mobile version of roTopo is in beta.</div><br>{{else}}<img src="gimble_menu_controls.png"/*tpa=https://rotopo.com/images/gimble_menu_controls.png*/ class="controls">{{/if}}<br><div tabindex="0" class="mob-btn button try">开始游戏 </div><div style="display:none" tabindex="0" class="mob-btn button logout">logout</div><div style="width:100%" class="auth-buttons"><div tabindex="0" class="mob-btn fblogin button half left">play using facebook<!--img(src="facebook-logo.png"/*tpa=https://rotopo.com/images/facebook-logo.png*/)--><img src="fb_icon.png"/*tpa=https://rotopo.com/images/fb_icon.png*/></div><div tabindex="0" class="mob-btn gglogin button half right">play using google<img src="google_icon.png"/*tpa=https://rotopo.com/images/google_icon.png*/></div></div><div class="info">
+				给ddos的一句话，祝你全家黑人抬馆，坟头蹦迪，
+				<br>
+	<span style="font-weight: bold; font-style: italic;">
+		QQ553881252 此源码转载于网络
+		</span> 发布于科学刀</div>{{> bknfr-footer}}      <div id="menu-ad" class="ad"><ins style="display:inline-block;width:728px;height:90px" data-ad-client="ca-pub-8948891110284871" data-ad-slot="7211575540" class="adsbygoogle"></ins><script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div><!--|<iframe class = "ad" src="//rcm-na.amazon-adsystem.com/e/cm?o=1&p=48&l=ur1&category=gift_certificates&banner=1G274HKHXM7QERC7YAG2&f=ifr&linkID=53262877a57d004ebb4ee327f5189c00&t=baanfell-20&tracking_id=baanfell-20&lt1=_new" width="728" height="90" scrolling="no" border="0" marginwidth="0" style="border:none;" frameborder="0"></iframe>--></div></script><script name="login-menu" type="text/x-handlebars-template" class="hbs-template"><div class="menu-content"><div class="login-info"><div class="header">Oh, you need to LOG IN before you can get...</div><div class="text"><div class="snip"><b>200+ NEW LEVELS</b> for weeks of mind-bending 3D challenges, and <b>6 NEW CHARACTERS</b> so you can be the person you've always wanted to be!</div><div class="snip">A <b>MULTPLIER BONUS</b> to earn points faster. Be the person you've always wanted to be faster!</div><div class="snip">All of your progress <b>AUTO-SAVED</b>. Play at work! Don't do your work. Play at home! Ignore your family.</div></div></div><div style="width:100%" class="auth-buttons"><div tabindex="0" class="mob-btn fblogin button half left">play using facebook<!--img(src="facebook-logo.png"/*tpa=https://rotopo.com/images/facebook-logo.png*/)--><img src="fb_icon.png"/*tpa=https://rotopo.com/images/fb_icon.png*/></div><div tabindex="0" class="mob-btn gglogin button half right">play using google<img src="google_icon.png"/*tpa=https://rotopo.com/images/google_icon.png*/></div></div><div class="mob-btn button back">continue offline demo</div><div class="info">Link your facebook or google account so we can save your game progress. We do not collect personal information from our users. Read more on our Terms of Service.</div>{{> bknfr-footer}}   </div></script><div id="view"> <div style="font-size:200%; padding:1em;" class="loading-text"></div><div id="overlay"></div><div id="menu" class="box"><div id="loader" style="font-size:150%; padding:1em;" class="text">(1/3) loading libraries...</div></div><div id="checkout-layer"></div><div id="alerter"></div></div><script>var loader = document.getElementById('loader');
+function getScript(source, callback, fail) {
+  var script = document.createElement('script');
+  //var prior = document.getElementsByTagName('#view')[0];
+  script.async = 1;
+  document.body.appendChild(script);
+  
+  script.onload = script.onreadystatechange = function( _, isAbort ) {
+      if(isAbort || !script.readyState || /loaded|complete/.test(script.readyState) ) {
+          script.onload = script.onreadystatechange = null;
+          script = undefined;
+          
+          if(!isAbort) { if(callback) callback(); } else {
+            fail();
+          }
+      } else {
+        fail();
+      }
+  };
+  
+  script.src = source;
+}
+
+handleError = function() {
+  loader.innerHTML = 'Error loading. Please try again later.';
+}
+
+getScript('libs.js'/*tpa=https://rotopo.com/javascripts/libs.js*/, function() {
+  loader.innerHTML = "(2/3) loading game..."
+  getScript('player.js'/*tpa=https://rotopo.com/javascripts/player.js*/, function() {
+  
+    var WB = {APP_MODE: "release"};
+    Overlay(WB);
+    Puzzle(WB);
+    Camera(WB);
+    AvatarEffects(WB);
+    Visuals(WB);
+    
+    var menuOptions = {el: $('#view'), networkKeys: {"facebookAppID":"543548432476981","googleClientID":"https://rotopo.com/858040734315-9km93ka2rcfsl6usegk9ea87scng1qar.apps.googleusercontent.com"}, gameInfo: {"numAvatars":7,"numLevels":50,"levelCounts":{"easy":16,"intermediate":19,"advanced":12,"insane":3}}, content: {"points":0,"levels":{"1":{"name":"starter","level_id":1,"directory":"core","difficulty":"easy","video":"sGI8O6hzrws","puzzles":[{"name":"ez_path","s":1,"path":"fs fs rs fs fs ls fs","reward":25,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"follow","drawWindow":"never","playerSpeed":2}},{"name":"flat","s":1,"path":"fs fs fs fs rs rs ls ls fs ls fs rs fs","reward":50,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"follow","drawWindow":"never","playerSpeed":2},"altStarts":[{"st":13,"dir":[0,0,1]}]},{"name":"barrel_roll","s":1,"path":"fs ru ls ru ls ru ls ru","reward":75,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"follow","playerSpeed":1.75,"cameraSpeed":2,"cameraAngle":20},"altStarts":[{"st":8,"dir":[-1,0,0]}]},{"name":"cube1","s":1,"box":["s","s","s",1,1,1],"reward":100,"opts":{"startTile":4,"startDir":[0,1,0],"drawWindow":"never","cameraType":"orbit"}},{"name":"stick","s":0.75,"box":["s","s2","s",1,2,1],"reward":125,"opts":{"startTile":7,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":4,"dir":[1,0,0]},{"st":3,"dir":[0,-1,0]}]},{"name":"v","s":0.65,"box":["s","s2","s",1,2,1],"reward":125,"extrudes":[[1]],"opts":{"startTile":7,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":13,"dir":[1,0,0]},{"st":5,"dir":[0,0,1]},{"st":2,"dir":[0,1,0]}]}]},"2":{"name":"tetras","level_id":2,"directory":"core","difficulty":"easy","video":"IYSHYl5lavs","puzzles":[{"name":"cube2","s":0.55,"box":["s2","s2","s2",2,2,2],"reward":25,"opts":{"startTile":2,"startDir":[0,1,0],"drawWindow":"never","cameraType":"orbit"},"altStarts":[{"st":1,"dir":[0,1,0]},{"st":1,"dir":[0,1,0]},{"st":0,"dir":[0,-1,0]}]},{"name":"pipe","s":0.55,"box":["s","s4","s",1,4,1],"reward":50,"opts":{"startTile":13,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":12,"dir":[0,1,0]},{"st":11,"dir":[0,1,0]},{"st":10,"dir":[1,0,0]},{"st":8,"dir":[0,0,1]}]},{"name":"zig","s":0.6,"box":["s","s2","s",1,2,1],"reward":75,"extrudes":[[1],[2]],"opts":{"startTile":7,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":6,"dir":[0,1,0]},{"st":2,"dir":[0,1,0]},{"st":3,"dir":[0,-1,0]},{"st":9,"dir":[1,0,0]}]},{"name":"podium","s":0.6,"box":["s","s2","s",1,2,1],"reward":100,"extrudes":[[1],[3]],"opts":{"startTile":7,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":6,"dir":[0,1,0]},{"st":10,"dir":[1,0,0]},{"st":0,"dir":[0,0,1]},{"st":11,"dir":[-1,0,0]}]},{"name":"ell","s":0.6,"box":["s","s3","s",1,3,1],"reward":125,"extrudes":[[0]],"opts":{"startTile":10,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":15,"dir":[1,0,0]},{"st":10,"dir":[1,0,0]},{"st":8,"dir":[0,-1,0]},{"st":4,"dir":[0,0,1]}]}]},"5":{"name":"letters","level_id":5,"directory":"core","difficulty":"easy","video":"BfM3KAqenE0","puzzles":[{"name":"x","s":0.75,"path":"fs fs ls fs rs rs fs ls fs rs rs fs ls fs rs rs fs ls fs","reward":25,"opts":{"startTile":4,"startDir":[0,0,-1],"cameraType":"follow","playerSpeed":1.5},"altStarts":[{"st":2,"dir":[0,0,-1]},{"st":6,"dir":[-1,0,0]},{"st":7,"dir":[-1,0,0]}]},{"name":"y","s":0.6,"box":["s","s4","s",1,4,1],"extrudes":[[5]],"reward":50,"opts":{"startTile":13,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":11,"dir":[-1,0,0]},{"st":6,"dir":[0,1,0]},{"st":0,"dir":[0,0,1]}]},{"name":"s","s":0.6,"box":["s","s3","s",1,3,1],"reward":75,"extrudes":[[5],[0]],"opts":{"startTile":10,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":10,"dir":[0,-1,0]},{"st":1,"dir":[0,-1,0]},{"st":20,"dir":[-1,0,0]}]},{"name":"T","s":0.6,"box":["s","s3","s",1,3,1],"reward":100,"extrudes":[[0],[3]],"opts":{"startTile":20,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":6,"dir":[1,0,0]},{"st":0,"dir":[0,0,1]},{"st":9,"dir":[0,-1,0]}]},{"name":"L","s":0.6,"box":["s","s3","s",1,3,1],"reward":125,"extrudes":[[2],[2]],"opts":{"startTile":10,"drawWindow":"never","startDir":[0,1,0]},"altStarts":[{"st":4,"dir":[0,1,0]},{"st":1,"dir":[0,0,1]},{"st":2,"dir":[0,-1,0]}]}]},"18":{"name":"circuits","level_id":18,"directory":"core","difficulty":"easy","video":"aW1bTq_hW3A","puzzles":[{"name":"box_walk","s":0.5,"path":"fs fd fs fs fd rs fs rd fs fs fd fs fs fd fs fs fd rs fs rd fs fs fd","reward":25,"opts":{"startTile":0,"startDir":[0,0,-1]},"altStarts":[{"st":19,"dir":[0,0,-1]},{"st":6,"dir":[1,0,0]},{"st":17,"dir":[0,0,1]}]},{"name":"slide","s":0.5,"path":"fs fs fs fs fs fs fs fd fs rs fs rs fs fs fd fs rs ls rs ls rs fs fd fs rs ls rs ls fd ls rs ls rs ls rs ls fs fs rs fd rs ls rs ls rs ld fs ls rs ls rs fd fs fd fs ls fd","reward":50,"opts":{"startTile":0,"startDir":[0,0,-1],"targetScale":0.75},"altStarts":[{"st":10,"dir":[-1,0,0]},{"st":49,"dir":[1,0,0]},{"st":33,"dir":[-1,0,0]}]},{"name":"bracelet","s":0.5,"path":"bd fs fs fd fs fs fs fs fd fs fs fd fs ls rs fs rs fs rs fs","reward":75,"opts":{"startTile":0,"startDir":[0,0,-1]},"altStarts":[{"st":16,"dir":[0,0,-1]},{"st":0,"dir":[0,0,1]}]},{"name":"box_path","s":0.6,"path":"fs fu rd fd ld rd fs fu rd ld fd rd ls fs fu ld rd ld rd ls fs fs fu rd ld fd rd ls fs fd fs fu rs","reward":100,"opts":{"startTile":0,"startDir":[0,0,-1],"targetScale":0.75},"altStarts":[{"st":10,"dir":[0,0,-1]},{"st":22,"dir":[0,-1,0]},{"st":3,"dir":[0,1,0]}]}]},"24":{"name":"routes","level_id":24,"directory":"core","difficulty":"easy","video":"yfU1oX7i4uM","puzzles":[{"name":"plunge","s":0.5,"path":"fd fu fd fu ls ld fu fd fu ld fu fd fu rs rd fu rd fu rd fu rd fu rd fs rd ls rd lu","reward":25,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","targetScale":1},"altStarts":[{"st":28,"dir":[-1,0,0]}]},{"name":"wings","s":0.45,"path":"fs rs fs fu fs fs ls fs fs ls fs fu fs fs ls fs rs fs fu fs fs rs fs fs rs fs fu fs fs lu","reward":50,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraAngle":45,"cameraType":"float","targetScale":1},"altStarts":[{"st":30,"dir":[0,-1,0]}]},{"name":"baby_steps","s":0.55,"path":"fs fu rs rd fs rs ld","extrudes":[[7]],"reward":75,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","targetScale":1},"altStarts":[{"st":7,"dir":[0,1,0]},{"st":9,"dir":[1,0,0]},{"st":10,"dir":[0,0,-1]}]},{"name":"inside_turns","s":0.55,"path":"fs <cam> lu rs fu ru ls lu </cam> fs fs rs lu rs ru <cam> lu rs ls fd fd fs rs lu ls fs lu </cam>","reward":100,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":45,"targetScale":1},"altStarts":[{"st":24,"dir":[0,0,-1]}]},{"name":"burrow","s":0.5,"path":"fs lu rs lu ru fs lu rs fu rs ru ls fu rs ru fu ls ru lu fs fs ls ru lu fu","reward":125,"opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","targetScale":1},"altStarts":[{"st":25,"dir":[0,0,1]}]}]},"41":{"name":"pop_ups","level_id":41,"directory":"core","difficulty":"easy","video":"RmpVfbKv0_M","puzzles":[{"name":"1","s":0.65,"path":"fs <cam> fu ls lu </cam> rs rs ls <cam> lu rs ru </cam>","opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":70,"cameraDist":2.5,"targetScale":0.75},"altStarts":[{"st":10,"dir":[1,0,0]}],"reward":25},{"name":"2","s":0.65,"path":"fs <cam> rs lu ls fs lu </cam> rs rs fs rs fs fs","opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":60,"cameraDist":2.5,"targetScale":0.9},"altStarts":[{"st":12,"dir":[-1,0,0]}],"reward":50},{"name":"3","s":0.65,"path":"fs ls <cam> fu rs ru </cam> fs <cam> fu </cam> ls lu fs rs rs fs fs rs fs fs rs","opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":70,"cameraDist":2.3,"targetScale":1},"altStarts":[{"st":2,"dir":[-1,0,0]},{"st":18,"dir":[1,0,0]}],"reward":75},{"name":"4","s":0.65,"path":"fs fs rs <cam> fu rs ru ls ls lu rs ru ls ls fs ls lu ru fs fs ru rs ls ls","opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":50,"cameraDist":2.5,"targetScale":1},"altStarts":[{"st":19,"dir":[0,0,1]},{"st":21,"dir":[0,0,-1]},{"st":6,"dir":[0,0,-1]}],"reward":100},{"name":"5","s":0.55,"path":"fs <cam> lu rs fs ru </cam> rs ls fs <cam> lu rs ru ls ls lu rs ru </cam> ls ls fs ls rs rs ls ls rs fs ls fs fs fs ls","opts":{"startTile":0,"startDir":[0,0,-1],"cameraType":"float","cameraAngle":40,"cameraDist":2,"targetScale":1},"altStarts":[{"st":2,"dir":[0,0,-1]},{"st":23,"dir":[1,0,0]},{"st":14,"dir":[0,0,1]}],"reward":125}]}},"levelHistory":{},"purchases":{},"avatars":{},"signedIn":0}}
+    
+    if (false) {
+      loader.innerHTML = "(3/3) loading user data..."
+      $.ajax({
+        url : '/api/login',
+        method: 'POST',
+        data: {},
+        dataType: 'json',
+        success: function(data) {
+          if (data.success) {
+            data.content.signedIn = true;
+            menuOptions.content = data.content;
+          }
+          WB.menu = new WB.Menu(menuOptions);
+          
+        },
+        error: handleError
+      });
+    } else {
+      WB.menu = new WB.Menu(menuOptions);
+    }
+  }, handleError)
+}, handleError);</script></body></html>
